@@ -1,0 +1,119 @@
+# AI-Service — the backend's door to the agent platform.
+#
+# Stateless: no database, no queue, no job state. A deploy is a rebuild and a
+# health check.
+
+stages:
+  - build
+  - test
+  - deploy
+
+default:
+  tags:
+    - llm
+
+variables:
+  DOCKER_HOST: unix:///var/run/docker.sock
+  DOCKER_TLS_CERTDIR: ""
+
+# ── Reusable: write .env from CI variables ──────────────────────────────────
+#
+# Not sed. A password containing | or / breaks the expression, and one
+# containing & is silently replaced by the matched text — the pipeline goes
+# green and the service cannot log in. This reads the keys from .env.example
+# and takes any that exist in the environment, whatever characters they hold.
+#
+# The result is never an artifact and never printed. The monorepo's job did
+# both: `artifacts: paths: [.env]` put filled-in production credentials in
+# GitLab's artifact store for a week, downloadable by anyone with project
+# access, and `cat .env | grep -v PASSWORD | grep -v SECRET | grep -v URL`
+# printed everything else — including MCP_AUTH_TOKEN, SPLUNK_TOKEN,
+# THREATQ_TOKEN and CONFLUENCE_API_TOKEN, none of which contain those words.
+.write_env: &write_env |
+  set -eu
+  : > .env
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) printf '%s\n' "$line" >> .env; continue ;;
+    esac
+    key=${line%%=*}
+    if [ "$key" = "$line" ]; then printf '%s\n' "$line" >> .env; continue; fi
+    if eval "[ \"\${${key}+set}\" = set ]"; then
+      eval "printf '%s=%s\n' \"\$key\" \"\$$key\"" >> .env
+    else
+      printf '%s\n' "$line" >> .env
+    fi
+  done < .env.example
+  echo "wrote .env — keys taken from CI variables:"
+  # Names only. The values are the point of the exercise.
+  while IFS= read -r line; do
+    key=${line%%=*}
+    case "$key" in ''|'#'*) continue ;; esac
+    if eval "[ \"\${${key}+set}\" = set ]"; then echo "  $key"; fi
+  done < .env.example
+
+build_image:
+  stage: build
+  image: docker:latest
+  script:
+    - docker build -t soc-ai:${CI_COMMIT_SHORT_SHA} .
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+code_test:
+  stage: test
+  image: python:3.12
+  script:
+    - pip install -q -r requirements.txt
+    - python -c "import main"
+    # The SSE reader is this service's whole job, and its failures are quiet.
+    # A terminal event carrying empty text once left status="started" in place,
+    # which turned a model timeout into a complaint about parsing.
+    - |
+      python - <<'PY'
+      from services import sse
+      def run(events):
+          r = sse.StreamReader()
+          for e in events:
+              r.feed_line('data: ' + e); r.feed_line('')
+          r.close(); return r
+      ok = run(['{"status":"started"}','{"message":{"content":"hi"}}',
+                '{"output":"hi there","status":"completed"}'])
+      assert ok.output == 'hi there', ok.output
+      bad = run(['{"status":"started"}','{"output":"","status":"failed","error":"timed out"}'])
+      assert bad.meta.get('status') == 'failed', bad.meta
+      assert bad.meta.get('error') == 'timed out', bad.meta
+      print('sse reader ok')
+      PY
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+deploy_production:
+  stage: deploy
+  image: docker:latest
+  environment:
+    name: production
+    # The address GitLab shows and links to. It is where the service actually
+    # answers, so it comes from a variable — localhost here would be a link to
+    # the runner, which is not where anyone reads this from.
+    url: ${AI_SERVICE_URL}
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - *write_env
+    - echo "========== Build and start =========="
+    - docker compose up -d --build --wait
+    - echo "========== Health =========="
+    # localhost here is the container's own loopback, reached through
+    # docker compose exec — not the runner's. It is the right address
+    # for asking a service whether it came up.
+    # /health reports whether the LLM server is reachable, so this catches a
+    # deploy that came up pointing at nothing.
+    - |
+      for i in $(seq 1 20); do
+        if docker compose exec -T soc-ai python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health',timeout=5).status==200 else 1)" 2>/dev/null; then
+          echo "healthy"; exit 0
+        fi
+        sleep 3
+      done
+      echo "soc-ai did not become healthy"; docker compose logs --tail 40 soc-ai; exit 1
