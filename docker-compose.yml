@@ -1,0 +1,33 @@
+# The AI service and the dashboard.
+#
+# Together because they are the two ends of the same conversation: the
+# dashboard is what an analyst reads, and the AI service is the backend's door
+# to the agent platform. Neither holds state.
+#
+#   cp .env.example .env
+#   docker compose up -d --build
+#
+# Needs, over soc-network: soc-llm-server (the AI service calls it) and
+# soc-core-api plus soc-llm-server behind nginx (the dashboard proxies to both,
+# so the browser stays on one origin and there is no CORS to configure).
+
+services:
+  soc-ai:
+    build: ./ai-service
+    container_name: soc-ai
+    ports: ["8100:8100"]
+    env_file: [.env]
+    restart: unless-stopped
+    networks: [soc-network]
+
+  soc-frontend:
+    build: ./frontend
+    container_name: soc-frontend
+    ports: ["3000:80"]
+    restart: unless-stopped
+    networks: [soc-network]
+
+networks:
+  soc-network:
+    name: soc-network
+    driver: bridge

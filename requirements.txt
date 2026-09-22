@@ -1,0 +1,8 @@
+# A stateless prompt -> text service needs an HTTP server and an HTTP client.
+# Anything that talks to Postgres, Redis or issues tokens belongs in ../backend
+# and was removed with the code that used it.
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+httpx==0.28.1
