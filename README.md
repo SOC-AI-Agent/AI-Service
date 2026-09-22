@@ -66,10 +66,8 @@ here. A setting that exists is a setting someone will eventually wire up.
 
 ## Commands
 
-Behind a compose profile, so it stays out of the default `docker compose up`:
-
 ```bash
-docker compose --profile ai up -d --build soc-ai
+docker compose up -d --build
 docker compose logs -f soc-ai
 curl -s localhost:8100/health
 curl -s -X POST localhost:8100/analyze \
@@ -93,6 +91,29 @@ That needs `/api/chat` rather than `/api/generate`: tool schemas travel in the
 and `/health`. The probe is the useful one when an answer looks wrong — it
 shows the request that was sent and the raw events that came back, which is how
 you tell "the LLM server said something unexpected" from "we parsed it wrong".
+
+## Running the whole stack
+
+This repo runs on its own with the compose file above, which is enough to work
+on it. Running the SOC end to end takes all five repos, checked out side by
+side, and one script that writes the `.env` files:
+
+```bash
+git clone https://gitlab.com/agentic-soc/backend.git     Backend
+git clone https://gitlab.com/agentic-soc/frontend.git    Frontend
+git clone https://gitlab.com/agentic-soc/ai-service.git  AI-Service
+git clone https://gitlab.com/agentic-soc/llm-server.git  LLM-Server
+git clone https://gitlab.com/agentic-soc/mcp-server.git  MCP-Server
+
+cd Backend
+./deploy/dev-setup.sh                            # writes .env in all four
+docker compose -f deploy/dev.yml up -d --build   # http://localhost:3000
+```
+
+The script lives in Backend because three of the secrets it generates have to
+be identical in more than one repo — the tokens the connectors check — and
+they are the ones that break quietly: a mismatch is a 401 with nothing saying
+why. Generating them in one place is the whole point.
 
 ---
 
