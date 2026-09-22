@@ -1,0 +1,34 @@
+meta {
+  name: Analyze
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{ai}}/analyze
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "rendered_prompt": "Alert: date=2026-09-21 time=07:20:31 devname=\"FGT-01\" srcip=10.1.100.11 dstip=45.83.122.9 dstport=8443 action=\"blocked\" service=\"HTTPS\" dstcountry=\"Russia\" user=\"jdoe\"\n\nSummarise the evidence."
+  }
+}
+
+tests {
+  test("responds 2xx", function() {
+    expect(res.getStatus()).to.be.within(200, 300);
+  });
+  test("has a response", function() {
+    expect(res.getBody().response).to.be.a("string");
+  });
+}
+
+docs {
+  What the worker calls. Add `agent` to route to a different one.
+}

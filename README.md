@@ -87,6 +87,12 @@ so a loop iteration does not cross the network twice.
 That needs `/api/chat` rather than `/api/generate`: tool schemas travel in the
 `tools` parameter, which `/api/generate` has no place for.
 
+## Tooling
+
+`api-tests/` is a Bruno collection for this service: `/analyze`, `/llm-probe`
+and `/health`. The probe is the useful one when an answer looks wrong — it
+shows the request that was sent and the raw events that came back, which is how
+you tell "the LLM server said something unexpected" from "we parsed it wrong".
 
 ---
 
