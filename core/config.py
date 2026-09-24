@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # agent in the body instead can use a static path and LLM_AGENT_FIELD.
     LLM_RUN_PATH: str = "/agents/{agent}/run"
     # Which agent handles an alert when the request does not name one.
-    LLM_DEFAULT_AGENT: str = "soc-triage"
+    LLM_DEFAULT_AGENT: str = "soc-suggest"
 
     # Request body field names, because these are the ones that differ between
     # implementations. Leave LLM_AGENT_FIELD empty if the agent is in the path.
