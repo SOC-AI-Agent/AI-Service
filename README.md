@@ -158,13 +158,6 @@ pip install -r requirements.txt -r tests/requirements.txt
 pytest -q
 ```
 
-## Tooling
-
-`api-tests/` is a Bruno collection for this service: `/analyze`, `/llm-probe`
-and `/health`. The probe is the useful one when an answer looks wrong — it
-shows the request that was sent and the raw events that came back, which is how
-you tell "the LLM server said something unexpected" from "we parsed it wrong".
-
 ## Running the whole stack
 
 This repo runs on its own with the compose file above, which is enough to work
