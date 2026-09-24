@@ -1,7 +1,15 @@
-# AI-Service — the backend's door to the agent platform.
+# AI-Service — the backend's door to the agent platform, and the playbook index.
 #
-# Stateless: no database, no queue, no job state. A deploy is a rebuild and a
-# health check.
+# No database, no queue, no job state; the playbook index lives on its own
+# volume and survives a rebuild. A deploy is a rebuild and a health check.
+#
+# AI_SERVICE_AUTH_TOKEN must be set as a CI variable, byte-identical to the one
+# the Backend project gets — a group variable, not one per project. Without it
+# the service refuses to start and the health check below fails the deploy.
+#
+# The image build downloads CPU torch (download.pytorch.org) and the embedding
+# model (huggingface.co). The runner that builds it needs to reach both; the
+# running container reaches neither.
 
 stages:
   - build
@@ -66,8 +74,12 @@ code_test:
   stage: test
   image: python:3.12
   script:
-    - pip install -q -r requirements.txt
-    - python -c "import main"
+    - pip install -q -r requirements.txt -r tests/requirements.txt
+    # A throwaway token: main refuses to import without one, which is the point.
+    - AI_SERVICE_AUTH_TOKEN=ci-throwaway python -c "import main"
+    # The playbook index and the auth gate, with a stand-in embedder — no torch,
+    # no model download.
+    - pytest -q
     # The SSE reader is this service's whole job, and its failures are quiet.
     # A terminal event carrying empty text once left status="started" in place,
     # which turned a model timeout into a complaint about parsing.

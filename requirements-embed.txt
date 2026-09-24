@@ -1,0 +1,6 @@
+# The embedding model behind playbook matching (tier 3). The Dockerfile installs
+# torch first from the CPU-only index: the default wheel from PyPI carries CUDA
+# libraries worth gigabytes that this service never uses. Without these
+# installed, tiers 1 and 2 still match by name and spelling, and /playbooks
+# says why matching by meaning is off.
+sentence-transformers==6.1.0

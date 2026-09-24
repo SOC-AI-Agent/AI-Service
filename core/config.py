@@ -42,6 +42,44 @@ class Settings(BaseSettings):
     # turning a legible error into a timeout.
     LLM_TIMEOUT: int = 1860
 
+    # Bearer token the backend presents on every route except /health. Must
+    # match AI_SERVICE_AUTH_TOKEN in Backend/.env. Unset = refuses to start:
+    # anything on soc-network could otherwise run agents and rewrite the
+    # playbook index.
+    AI_SERVICE_AUTH_TOKEN: str = ""
+
+    # ── Playbook index ───────────────────────────────────────────────────────
+    # The backend reads the playbook pages out of Confluence (through the
+    # connector) and sends them here; this service extracts the fields, embeds
+    # them and answers "which playbook covers this alert". The index is one
+    # file on a volume, so a restart does not mean embedding everything again.
+    PLAYBOOK_INDEX_PATH: str = "/data/playbook-index.npz"
+    # Tier 2: a renamed detection still finds its playbook by spelling.
+    PLAYBOOK_FUZZY_CUTOFF: float = 0.85
+    # Tier 3: matching by meaning when neither the name nor its spelling does.
+    # false leaves tiers 1 and 2 only, and no model is loaded.
+    PLAYBOOK_SEMANTIC: bool = True
+    # A meaning match must reach this cosine similarity AND lead the next
+    # playbook by this much. A wrong playbook is worse than none — the analyst
+    # reads criteria for another detection — so both err high. Measured with
+    # bge-small on the notebook's six sample playbooks and 26 alert names:
+    # 0.75/0.05 took 8 of 12 renamed detections and 0 of 14 unrelated ones.
+    # Six playbooks is not your wiki: recalibrate on the real pages.
+    PLAYBOOK_SEMANTIC_MIN_SCORE: float = 0.75
+    PLAYBOOK_SEMANTIC_MIN_MARGIN: float = 0.05
+    # More than this in one index request is refused rather than half-read.
+    PLAYBOOK_MAX_PAGES: int = 5000
+
+    # The embedding model runs in this process, on CPU, never through Ollama:
+    # soc-ollama holds one model at a time, and loading this one would evict
+    # the 7B the agents are waiting on.
+    EMBED_MODEL: str = "BAAI/bge-small-en-v1.5"
+    # BGE models are trained with this prefix on the query side only.
+    EMBED_QUERY_PREFIX: str = "Represent this sentence for searching relevant passages: "
+    # Where the weights are. The image bakes them in here at build time, and
+    # runs with HF_HUB_OFFLINE=1 so nothing is fetched from the internet at runtime.
+    EMBED_CACHE_DIR: str = "/models"
+
     model_config = {"env_file": ".env", "case_sensitive": True, "extra": "ignore"}
 
     def _json_setting(self, raw: str, name: str) -> dict:

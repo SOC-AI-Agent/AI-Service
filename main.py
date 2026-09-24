@@ -1,24 +1,67 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from starlette.concurrency import run_in_threadpool
 
+from core.auth import BearerAuthMiddleware
 from core.config import settings
+from playbooks.embedder import EmbedderUnavailable
+from playbooks.routes import router as playbooks_router
+from playbooks.store import get_store
 from schemas.analysis import AnalyzeRequest, AnalyzeResponse, ProbeResponse
 from services import llm_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("soc-ai")
 
+# Refused at boot, like the connectors. Without a token every route here —
+# running agents, rewriting the playbook index — is open to anything that can
+# reach the port.
+if not settings.AI_SERVICE_AUTH_TOKEN:
+    raise RuntimeError("refusing to start, unset required env: AI_SERVICE_AUTH_TOKEN")
+
+
+async def _warm(store) -> None:
+    """Load the embedding model now, off the event loop, so the first alert
+    that needs matching by meaning does not pay for it inside its timeout."""
+    if store.embedder is None or not hasattr(store.embedder, "warm"):
+        return
+    try:
+        await run_in_threadpool(store.embedder.warm)
+    except EmbedderUnavailable as exc:
+        store.semantic_error = str(exc)
+        logger.error("matching by meaning is off: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    store = get_store()
+    store.load()
+    warming = asyncio.create_task(_warm(store))
+    try:
+        yield
+    finally:
+        warming.cancel()
+
+
 app = FastAPI(
     title=settings.APP_NAME,
-    version="3.1.0",
-    description="Door to the LLM server. Streams the agent's answer back to the core backend.",
+    version="3.2.0",
+    description=(
+        "The backend's door to the LLM server, and the playbook index: the backend sends "
+        "the Confluence pages, this service extracts, embeds and matches them."
+    ),
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # No CORS middleware: nothing in a browser calls this service. Only the core
-# backend does, from inside soc-network.
+# backend does, from inside soc-network, with the bearer token.
+app.add_middleware(BearerAuthMiddleware, token=settings.AI_SERVICE_AUTH_TOKEN)
+app.include_router(playbooks_router)
 
 
 @app.post("/analyze", response_model=AnalyzeResponse, tags=["Analysis"])
@@ -80,4 +123,5 @@ async def health() -> dict:
         "default_agent": settings.LLM_DEFAULT_AGENT,
         "stream_mode": settings.LLM_STREAM_MODE,
         "upstream": upstream,
+        "playbooks": get_store().status()["playbooks"],
     }

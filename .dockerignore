@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+# Secrets stay out of the image; compose passes them in with env_file.
+.env
+.git/
+tests/
+pytest.ini
+api-tests/
