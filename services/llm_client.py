@@ -126,9 +126,11 @@ async def run_agent(
         raise LLMServerError(f"agent run failed: {result.get('error') or 'unknown error'}")
     if not result["response"].strip():
         # An empty answer is a failure the backend should see as one, not a
-        # COMPLETED job holding an empty string.
+        # COMPLETED job holding an empty string. reader.meta["error"] is set
+        # when the stream carried one (Agent-Server's mid-stream `error` event).
+        reason = f": {result['error']}" if result.get("error") else ""
         raise LLMServerError(
-            f"the LLM server streamed {reader.events} events but no answer text"
+            f"the LLM server streamed {reader.events} events but no answer text{reason}"
         )
     return result
 
@@ -169,7 +171,7 @@ def _shape(meta: dict, text: str, started: float, agent: str) -> dict[str, Any]:
 
 
 async def health() -> dict[str, Any]:
-    url = settings.LLM_SERVER_URL.rstrip("/") + "/health"
+    url = settings.LLM_SERVER_URL.rstrip("/") + "/" + settings.LLM_HEALTH_PATH.lstrip("/")
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.get(url, headers=settings.extra_headers)

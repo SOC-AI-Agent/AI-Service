@@ -11,17 +11,27 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = False
 
-    LLM_SERVER_URL: str = "http://soc-llm-server:8400"
+    # Agent-Server (DALL-M) — see ../Agent-Server/readme.md. Not on soc-network:
+    # it is its own stack (own Postgres, own compose, own dall-m-net), reached
+    # the same way Splunk/ThreatQ/Confluence are, by URL rather than container
+    # name. host.docker.internal reaches its published port 8000 when it runs
+    # on the same machine; point this at wherever it actually runs otherwise.
+    LLM_SERVER_URL: str = "http://host.docker.internal:8000"
     # Path to run an agent. `{agent}` is substituted; a server that takes the
     # agent in the body instead can use a static path and LLM_AGENT_FIELD.
-    LLM_RUN_PATH: str = "/agents/{agent}/run"
+    # Agent-Server: POST /v1/agents/{slug}/chat.
+    LLM_RUN_PATH: str = "/v1/agents/{agent}/chat"
     # Which agent handles an alert when the request does not name one.
     LLM_DEFAULT_AGENT: str = "soc-suggest"
 
     # Request body field names, because these are the ones that differ between
     # implementations. Leave LLM_AGENT_FIELD empty if the agent is in the path.
-    LLM_INPUT_FIELD: str = "input"
+    # Agent-Server's AgentChatRequest reads the alert text as "message".
+    LLM_INPUT_FIELD: str = "message"
     LLM_AGENT_FIELD: str = ""
+    # Path this service's own health check asks the agent platform for.
+    # Agent-Server has no /health — its root answers {"status": "ok"}.
+    LLM_HEALTH_PATH: str = "/"
     # Extra body fields as JSON, e.g. {"stream": true, "save": false}
     LLM_EXTRA_BODY: str = ""
 
@@ -70,9 +80,9 @@ class Settings(BaseSettings):
     # More than this in one index request is refused rather than half-read.
     PLAYBOOK_MAX_PAGES: int = 5000
 
-    # The embedding model runs in this process, on CPU, never through Ollama:
-    # soc-ollama holds one model at a time, and loading this one would evict
-    # the 7B the agents are waiting on.
+    # The embedding model runs in this process, on CPU. Agent-Server's llama.cpp
+    # is not an option: it answers chat completions only, over a narrow HTTP API
+    # this service has no other access to, not a shared inference engine.
     EMBED_MODEL: str = "BAAI/bge-small-en-v1.5"
     # BGE models are trained with this prefix on the query side only.
     EMBED_QUERY_PREFIX: str = "Represent this sentence for searching relevant passages: "

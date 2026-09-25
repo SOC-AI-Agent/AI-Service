@@ -3,13 +3,15 @@
 #   cp .env.example .env      then set AI_SERVICE_AUTH_TOKEN (same as Backend/.env)
 #   docker compose up -d --build
 #
-# No database, no queue, no job state. It hands a rendered prompt to the LLM
-# server and returns what the agent answered, and it keeps one thing: the
+# No database, no queue, no job state. It hands a rendered prompt to the agent
+# platform and returns what the agent answered, and it keeps one thing: the
 # playbook index the backend builds by sending it the Confluence pages.
 #
-# Needs soc-llm-server on soc-network. It starts without it; /health reports
-# the LLM server as unreachable and /analyze fails with a message naming it,
-# rather than the container refusing to come up.
+# Needs Agent-Server (../Agent-Server, LLM_SERVER_URL in .env). It starts
+# without it; /health reports it unreachable and /analyze fails with a message
+# naming it, rather than the container refusing to come up. Agent-Server is not
+# on soc-network — it is its own stack, reached by URL like Splunk/ThreatQ/
+# Confluence are — so nothing here waits on it or joins its network.
 
 services:
   soc-ai:
@@ -23,6 +25,11 @@ services:
     volumes:
       # The playbook index. A restart loads it instead of embedding every page again.
       - playbook-index:/data
+    # Lets LLM_SERVER_URL=http://host.docker.internal:8000 reach Agent-Server's
+    # published port when it runs via its own compose on this same machine.
+    # Docker Desktop resolves host.docker.internal without this; Linux needs it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks: [soc-network]
 

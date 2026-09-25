@@ -4,12 +4,13 @@ Text -> vectors, in this process.
 Every method here blocks: loading the model reads a few hundred MB, and an
 encode is CPU work that holds the thread for as long as it takes. Callers run
 them through `run_in_threadpool`, never on the event loop, or /analyze — which
-is waiting on a stream from the LLM server — stops being read until the encode
-finishes.
+is waiting on a stream from the agent platform — stops being read until the
+encode finishes.
 
-Not through Ollama. soc-ollama is run with OLLAMA_MAX_LOADED_MODELS=1, so asking
-it for an embedding model evicts the 7B the agents use, and the next agent call
-pays to load it back.
+Not asked of the agent platform. Agent-Server's llama.cpp only ever answers a
+chat completion over `/v1/chat/completions`, reachable only through
+Agent-Server's own `/v1/agents/{slug}/chat` at that — there is no shared
+inference engine here to ask for an embedding instead.
 """
 
 from __future__ import annotations

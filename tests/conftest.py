@@ -24,6 +24,14 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 os.environ["AI_SERVICE_AUTH_TOKEN"] = TOKEN
 os.environ["LLM_SERVER_URL"] = "http://127.0.0.1:9"
 os.environ["PLAYBOOK_INDEX_PATH"] = str(ROOT / "tests" / ".unused-index.npz")
+# Set explicitly rather than left to fall through to .env.example's defaults
+# (which a developer's own .env may not match, or may not even be present at
+# all in CI): test_agent_server_contract.py checks these are Agent-Server's
+# real contract, and a real .env sitting in this checkout must not decide
+# whether that check means anything.
+os.environ["LLM_RUN_PATH"] = "/v1/agents/{agent}/chat"
+os.environ["LLM_INPUT_FIELD"] = "message"
+os.environ["LLM_HEALTH_PATH"] = "/"
 
 from playbooks import store as store_module  # noqa: E402
 from playbooks.embedder import EmbedderUnavailable  # noqa: E402

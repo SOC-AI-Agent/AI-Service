@@ -41,6 +41,18 @@ META_KEYS = {
     "tokens_eval": "tokens_eval",
     "total_duration_ms": "total_duration_ms",
     "duration_ms": "total_duration_ms",
+    # Agent-Server (DALL-M): input_tokens/output_tokens on its JSON response,
+    # prompt_tokens/completion_tokens (OpenAI/llama.cpp's own names) on its
+    # SSE "done" event, latency_ms on both.
+    "input_tokens": "tokens_prompt",
+    "prompt_tokens": "tokens_prompt",
+    "output_tokens": "tokens_eval",
+    "completion_tokens": "tokens_eval",
+    "latency_ms": "total_duration_ms",
+    # Agent-Server's mid-stream failure: event: error / data: {"message": "..."}.
+    # None of its other events carry a bare top-level "message" string, so this
+    # is unambiguous for the one server this key is here for.
+    "message": "error",
 }
 
 
