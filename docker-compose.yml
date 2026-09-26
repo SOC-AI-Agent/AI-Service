@@ -37,9 +37,10 @@ volumes:
   playbook-index:
 
 networks:
-  # One network, shared by all five repos' stacks and named explicitly so it is
-  # `soc-network` rather than `<project>_soc-network`. Whichever comes up first
-  # creates it; the rest join it and reach each other by container name.
+  # Shared by AI-service/Backend/Frontend/MCP-Server's stacks, reached by
+  # container name. Created once, outside any one project (`docker network
+  # create soc-network`) — external here so this project doesn't believe it
+  # owns and can tear down a network the others are still using.
   soc-network:
+    external: true
     name: soc-network
-    driver: bridge
