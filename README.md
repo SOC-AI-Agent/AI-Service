@@ -175,11 +175,100 @@ this side creates or restores them.
 "view trace" link (which only ever showed when one was set) stops appearing —
 not a bug on either side, just a capability the new platform doesn't have yet.
 
-**A known issue in Agent-Server's own `docker-compose.yml`, not this repo's:**
-`dall-m-server` depends on `dall-m-llamacpp` with `condition: service_healthy`,
-but `dall-m-llamacpp` defines no healthcheck — so `docker compose up` there can
-hang rather than proceed. Worth knowing before assuming a problem is on this
-side of the URL.
+**On a first boot, Agent-Server is down for minutes.** `dall-m-server` waits
+for `dall-m-llamacpp` to be healthy (the llama.cpp image's own healthcheck),
+which is after its model is downloaded and loaded. Until then `/health` here
+reports `"llm_server": false`, and that is not a problem on this side of the
+URL.
+
+### In production
+
+Both repos deploy from `main` onto the same machine: each `deploy_production`
+job runs on the `soc-deploy` runner, and that runner is the deployment target.
+So the default URL holds in production too — `host.docker.internal` reaches
+Agent-Server's published port 8000, and the `extra_hosts: host-gateway` line in
+this repo's `docker-compose.yml` is what makes that name resolve on Linux.
+
+**1. Deploy Agent-Server first.** Its pipeline builds the stack, runs
+`create_db.py` (safe on every deploy: schema plus in-place upgrades) and
+waits for `dall-m-server` to answer. Set these as CI variables in that repo —
+a key left unset silently takes the development default from its `.env.example`:
+
+| Variable | Why |
+| --- | --- |
+| `JWT_SECRET` | The default is in the repo; with it anyone can sign an admin token. |
+| `DB_PASSWORD` | The default is in the repo, and Postgres is published on 5497 (see step 5). |
+| `NEXT_PUBLIC_BASE_URL` | Where the analyst's browser reaches port 8000. Left as `localhost`, the admin UI loads and every call fails. |
+| `AGENT_ADMIN_PASSWORD` | First deploy only — it creates the admin. Unset it afterwards: while set, every deploy sets the admin password back to it. |
+
+**2. Create the agents.** Nothing creates them — add them at the admin UI
+(`:7100`) or `POST /restful/agents`, with slugs matching the Backend's
+`LLM_SUGGEST_AGENT` / `LLM_REQUIREMENTS_AGENT` / `LLM_CONCLUDE_AGENT`:
+
+| Agent | Needed when |
+| --- | --- |
+| `soc-suggest` | Always — stage 1. |
+| `soc-requirements`, `soc-conclude` | Only if the Splunk stage runs (`SPLUNK_LOOKUP_MODE` `manual` or `auto`). With `off`, stage 1 calls `soc-suggest` alone. |
+
+Each must exist, be active and have an active prompt version, or the job
+fails: a missing slug comes back as "the LLM server has no agent …", an
+inactive agent or one with no active prompt as "LLM server returned 409: …".
+
+**3. Set this repo's CI variables.** `AI_SERVICE_AUTH_TOKEN`, the same value
+as the Backend's. Leave `LLM_SERVER_URL` at its default while Agent-Server is
+on this machine. Every other `LLM_*` default is already Agent-Server's
+contract.
+
+**4. Check the connection yourself after deploying.** The pipeline's health
+check passes on HTTP 200, and `/health` answers 200 even when Agent-Server is
+unreachable — it says so in the body. A deploy pointing at the wrong URL goes
+green. Ask for the body:
+
+```bash
+docker exec soc-ai python -c "import urllib.request, json; h = json.load(urllib.request.urlopen('http://localhost:8100/health')); print(h['llm_server'], h['llm_server_url'], h['upstream'])"
+# True http://host.docker.internal:8000 {'status': 'ok'}
+```
+
+Then send one call down the whole path (the token is already in the
+container's environment). It writes one row to Agent-Server's history, and that
+history cannot be deleted, so the prompt says what it was:
+
+```bash
+docker exec soc-ai python -c "
+import urllib.request, json, os
+req = urllib.request.Request('http://localhost:8100/analyze', method='POST',
+    data=json.dumps({'rendered_prompt': 'connection test after deploy', 'agent': 'soc-suggest'}).encode(),
+    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + os.environ['AI_SERVICE_AUTH_TOKEN']})
+d = json.load(urllib.request.urlopen(req, timeout=300)); print(d['status'], d['error'])"
+# completed None
+```
+
+Agent-Server logs the same call, or the reason it refused it:
+
+```bash
+docker logs dall-m-server 2>&1 | grep dall_m.invoke | tail -3
+# ... agent=soc-suggest v1 model=... stream=True in_chars=28 -> success 812ms tokens in=... out=...
+# ... agent=soc-suggest version=active rejected: Agent is inactive
+```
+
+**5. Close Agent-Server's ports.** Its compose publishes 8000 (API), 8080
+(llama.cpp), 7100 (admin UI) and 5497 (Postgres) on every interface.
+`/v1/agents/...` takes no token and llama.cpp's own API takes none either, so
+anything that can reach the machine can run any agent, or the model directly.
+Allow 8000 only from this machine's Docker networks (172.16.0.0/12 by default —
+that is where calls from `soc-ai` arrive), 7100 from the analysts' network,
+and 8080 and 5497 from nothing.
+Do it in front of the machine (security group, network firewall) or in the
+`DOCKER-USER` iptables chain: ports Docker publishes bypass ufw's rules. The
+day Agent-Server checks a token, set `LLM_AUTH_TOKEN` here.
+
+**Agent-Server on another machine.** Point its `deploy_production` job at that
+machine's runner (the `soc-deploy` tag in its `.gitlab-ci.yml`) and set
+`LLM_SERVER_URL=http://<that-host>:8000` here. Alerts and answers now cross
+the network unencrypted to an API that takes no token, so put a TLS reverse
+proxy in front of port 8000 that only accepts this machine, and use its
+`https://` address. `LLM_EXTRA_HEADERS` carries a header the proxy checks, if
+it wants one.
 
 ## Configuration
 
