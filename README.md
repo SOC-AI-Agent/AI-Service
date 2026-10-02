@@ -16,7 +16,7 @@ kept here is the playbook index, a single file on the `playbook-index` volume.
 
 ```
 soc-core-worker ──POST /analyze──────────► soc-ai ──POST /v1/agents/{slug}/chat──► Agent-Server
-soc-core-worker ──PUT  /playbooks/index──► soc-ai      (pages read from soc-mcp-confluence GET /pages)
+soc-core-worker ──PUT  /playbooks/index──► soc-ai      (pages the worker read from Confluence's REST API)
 soc-core-worker ──POST /playbooks/match──► soc-ai
 ```
 
