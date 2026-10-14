@@ -56,6 +56,8 @@ stages:
 build_image:
   stage: build
   image: docker:latest
+  tags:
+    - test
   # A shared runner has no Docker daemon of its own, so one is started
   # alongside. The deploy job does the opposite — it wants the daemon of the
   # host it is deploying to — which is why this is set per job rather than
@@ -73,6 +75,8 @@ build_image:
 code_test:
   stage: test
   image: python:3.12
+  tags:
+    - test
   script:
     - pip install -q -r requirements.txt -r tests/requirements.txt
     # A throwaway token: main refuses to import without one, which is the point.
@@ -110,11 +114,10 @@ deploy_production:
   # target — a shared runner would build the stack inside a throwaway
   # container and take it away again.
   tags:
-    # The runner installed on the machine that hosts the stack. Named for what
-    # it is for, not for what the old machine was called — the job that needs
-    # it needs it because the runner IS the deployment target, and a tag saying
-    # so is the difference between "which runner" and "which server".
-    - soc-deploy
+    # `llm` is the production runner: the one installed on the machine that
+    # hosts the stack, so the runner IS the deployment target. Build and test
+    # jobs run on `test`; the same runner carries both tags today.
+    - llm
   variables:
     # The socket of the machine this runner is on: the deployment target.
     DOCKER_HOST: unix:///var/run/docker.sock
@@ -131,7 +134,7 @@ deploy_production:
     - *write_env
     - echo "========== Build and start =========="
     # soc-network is external (see docker-compose.yml) — shared with
-    # Backend/Frontend/MCP-Server's deploys, all on this same soc-deploy
+    # Backend/Frontend/MCP-Server's deploys, all on this same production
     # runner/host. Whichever of the four deploys first, creates it; idempotent
     # so the other three deploying in any order or any number of times is fine.
     - docker network create soc-network 2>/dev/null || true

@@ -184,7 +184,7 @@ URL.
 ### In production
 
 Both repos deploy from `main` onto the same machine: each `deploy_production`
-job runs on the `soc-deploy` runner, and that runner is the deployment target.
+job runs on the runner tagged `llm`, and that runner is the deployment target.
 So the default URL holds in production too — `host.docker.internal` reaches
 Agent-Server's published port 8000, and the `extra_hosts: host-gateway` line in
 this repo's `docker-compose.yml` is what makes that name resolve on Linux.
@@ -263,7 +263,7 @@ Do it in front of the machine (security group, network firewall) or in the
 day Agent-Server checks a token, set `LLM_AUTH_TOKEN` here.
 
 **Agent-Server on another machine.** Point its `deploy_production` job at that
-machine's runner (the `soc-deploy` tag in its `.gitlab-ci.yml`) and set
+machine's runner (the `llm` tag in its `.gitlab-ci.yml`) and set
 `LLM_SERVER_URL=http://<that-host>:8000` here. Alerts and answers now cross
 the network unencrypted to an API that takes no token, so put a TLS reverse
 proxy in front of port 8000 that only accepts this machine, and use its
