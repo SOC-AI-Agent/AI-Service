@@ -25,7 +25,7 @@ services:
     volumes:
       # The playbook index. A restart loads it instead of embedding every page again.
       - playbook-index:/data
-    # Lets LLM_SERVER_URL=http://host.docker.internal:8000 reach Agent-Server's
+    # Lets LLM_SERVER_URL=http://host.docker.internal:8001 reach Agent-Server's
     # published port when it runs via its own compose on this same machine.
     # Docker Desktop resolves host.docker.internal without this; Linux needs it.
     extra_hosts:

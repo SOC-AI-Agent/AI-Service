@@ -14,7 +14,13 @@
 stages:
   - build
   - test
+  - inspect
   - deploy
+
+# The office proxy, the runner host's only way to the internet. A CI/CD
+# variable of the same name overrides this; an empty one turns the proxy off.
+variables:
+  BUILD_PROXY: "http://192.168.137.120:8080"
 
 
 # ── Reusable: write .env from CI variables ──────────────────────────────────
@@ -53,22 +59,38 @@ stages:
     if eval "[ \"\${${key}+set}\" = set ]"; then echo "  $key"; fi
   done < .env.example
 
+# ── Reusable: the office proxy ──────────────────────────────────────────────
+#
+# Without it apt, npm, pip and prisma time out on the runner host ("Unable to
+# locate package"). Exported for the npm/pip a job runs itself, and handed to
+# `docker build` / `docker compose build` as PROXY_ARGS: a build does not
+# inherit the job's environment. These are Docker's predefined proxy build
+# args — no ARG line needed in any Dockerfile, and they stay out of the image's
+# history. Both spellings, because apt reads only the lowercase ones. Set inside
+# the script, after the checkout, so `git clone` never goes through the proxy.
+.proxy: &proxy |
+  p="${BUILD_PROXY:-}"
+  np="localhost,127.0.0.1"
+  export http_proxy="$p" https_proxy="$p" HTTP_PROXY="$p" HTTPS_PROXY="$p" \
+         no_proxy="$np" NO_PROXY="$np"
+  PROXY_ARGS="--build-arg http_proxy=$p --build-arg https_proxy=$p --build-arg HTTP_PROXY=$p --build-arg HTTPS_PROXY=$p --build-arg no_proxy=$np --build-arg NO_PROXY=$np"
+  if [ -n "$p" ]; then echo "proxy: on"; else echo "proxy: off (BUILD_PROXY is empty)"; fi
+
 build_image:
   stage: build
   image: docker:latest
   tags:
-    - test
-  # A shared runner has no Docker daemon of its own, so one is started
-  # alongside. The deploy job does the opposite — it wants the daemon of the
-  # host it is deploying to — which is why this is set per job rather than
-  # once at the top.
-  services:
-    - docker:dind
+    - llm
+  # Builds on the runner host's own Docker daemon, through the socket the llm
+  # runner mounts — no docker:dind. One fixed tag, overwritten each run: the
+  # host is the production machine, and an image per commit would pile up on
+  # its disk.
   variables:
-    DOCKER_HOST: tcp://docker:2375
+    DOCKER_HOST: unix:///var/run/docker.sock
     DOCKER_TLS_CERTDIR: ""
   script:
-    - docker build -t soc-ai:${CI_COMMIT_SHORT_SHA} .
+    - *proxy
+    - docker build $PROXY_ARGS -t soc-ai:ci .
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
@@ -76,8 +98,9 @@ code_test:
   stage: test
   image: python:3.12
   tags:
-    - test
+    - llm
   script:
+    - *proxy
     - pip install -q -r requirements.txt -r tests/requirements.txt
     # A throwaway token: main refuses to import without one, which is the point.
     - AI_SERVICE_AUTH_TOKEN=ci-throwaway python -c "import main"
@@ -106,6 +129,36 @@ code_test:
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
+# Which host ports the SOC stack publishes on this machine and what holds each
+# one, this host's addresses, and its packet filter. Read-only
+# (scripts/inspect-ports.sh, the same file as Backend's scripts/inspect-ports.sh). For a
+# port that answers on the host but times out from a browser, it shows whether
+# this host drops the packets or the network between does. By itself on main,
+# before deploy_production; a button (▶) on other protected branches. Never
+# stops a pipeline.
+inspect_ports:
+  stage: inspect
+  image: docker:latest
+  tags:
+    - llm
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_TLS_CERTDIR: ""
+  # Reads production without deploying to it; whoever may deploy to the
+  # protected "production" environment is who may run this.
+  environment:
+    name: production
+    action: access
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      allow_failure: true
+    - if: '$CI_COMMIT_REF_PROTECTED == "true"'
+      when: manual
+      allow_failure: true
+  script:
+    - sh scripts/inspect-ports.sh
+
 deploy_production:
   stage: deploy
   image: docker:latest
@@ -115,8 +168,10 @@ deploy_production:
   # container and take it away again.
   tags:
     # `llm` is the production runner: the one installed on the machine that
-    # hosts the stack, so the runner IS the deployment target. Build and test
-    # jobs run on `test`; the same runner carries both tags today.
+    # hosts the stack, so the runner IS the deployment target. Every job in
+    # this file runs on it — a docker executor with the host's
+    # /var/run/docker.sock mounted. The `test` runner is a shell executor with
+    # no docker, so nothing here uses it.
     - llm
   variables:
     # The socket of the machine this runner is on: the deployment target.
@@ -138,7 +193,9 @@ deploy_production:
     # runner/host. Whichever of the four deploys first, creates it; idempotent
     # so the other three deploying in any order or any number of times is fine.
     - docker network create soc-network 2>/dev/null || true
-    - docker compose up -d --build --wait
+    - *proxy
+    - docker compose build $PROXY_ARGS
+    - docker compose up -d --wait
     - echo "========== Health =========="
     # localhost here is the container's own loopback, reached through
     # docker compose exec — not the runner's. It is the right address
@@ -146,10 +203,39 @@ deploy_production:
     # /health reports whether the LLM server is reachable, so this catches a
     # deploy that came up pointing at nothing.
     - |
+      healthy=""
       for i in $(seq 1 20); do
         if docker compose exec -T soc-ai python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health',timeout=5).status==200 else 1)" 2>/dev/null; then
-          echo "healthy"; exit 0
+          healthy=yes; break
         fi
         sleep 3
       done
-      echo "soc-ai did not become healthy"; docker compose logs --tail 40 soc-ai; exit 1
+      if [ -z "$healthy" ]; then
+        echo "soc-ai did not become healthy"; docker compose logs --tail 40 soc-ai; exit 1
+      fi
+      echo "healthy inside the container"
+
+    - echo "========== Address =========="
+    # Not published on this host: only the Backend calls it, over soc-network,
+    # at soc-ai:8100 (the Backend's AI_SERVICE_URL), with the bearer token. So
+    # /health is asked from a throwaway container on soc-network, the way the
+    # Backend asks — and its answer says where this service looks for
+    # Agent-Server (LLM_SERVER_URL) and whether that answered. Agent-Server not
+    # answering is reported, not fatal: it may simply deploy after this.
+    - |
+      url="http://soc-ai:8100"
+      echo "AI-Service    $url   (soc-network only, not published on this host)"
+      echo "Backend uses  AI_SERVICE_URL=$url"
+      if ! answer=$(docker run --rm --network soc-network --entrypoint wget "$CI_JOB_IMAGE" -qO- -T 15 "$url/health"); then
+        echo "$url/health does not answer on soc-network: the Backend cannot reach this service."
+        exit 1
+      fi
+      echo "  answers on soc-network"
+      llm_url=$(printf '%s' "$answer" | sed -nE 's/.*"llm_server_url": ?"([^"]*)".*/\1/p')
+      llm_up=$(printf '%s' "$answer" | sed -nE 's/.*"llm_server": ?(true|false).*/\1/p')
+      if [ "$llm_up" = true ]; then
+        echo "Agent-Server  $llm_url   answers"
+      else
+        echo "Agent-Server  $llm_url   does NOT answer — agent calls fail until it does"
+        echo "              (Agent-Server's deploy prints the LLM_SERVER_URL to use)"
+      fi

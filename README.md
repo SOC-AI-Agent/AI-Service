@@ -226,7 +226,7 @@ green. Ask for the body:
 
 ```bash
 docker exec soc-ai python -c "import urllib.request, json; h = json.load(urllib.request.urlopen('http://localhost:8100/health')); print(h['llm_server'], h['llm_server_url'], h['upstream'])"
-# True http://host.docker.internal:8000 {'status': 'ok'}
+# True http://host.docker.internal:8001 {'status': 'ok'}
 ```
 
 Then send one call down the whole path (the token is already in the
@@ -277,7 +277,7 @@ See `.env.example`; each setting is explained there. The ones that matter:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `AI_SERVICE_AUTH_TOKEN` | — | Required. Same value as `Backend/.env`. |
-| `LLM_SERVER_URL` | `http://host.docker.internal:8000` | Agent-Server, not on `soc-network` — see above. |
+| `LLM_SERVER_URL` | `http://host.docker.internal:8001` | Agent-Server, not on `soc-network` — see above. |
 | `LLM_RUN_PATH` | `/v1/agents/{agent}/chat` | Agent-Server's invoke route. |
 | `LLM_INPUT_FIELD` | `message` | Agent-Server's `AgentChatRequest.message`. |
 | `LLM_HEALTH_PATH` | `/` | Agent-Server has no `/health`. |

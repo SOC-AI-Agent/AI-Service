@@ -14,9 +14,9 @@ class Settings(BaseSettings):
     # Agent-Server (DALL-M) — see ../Agent-Server/readme.md. Not on soc-network:
     # it is its own stack (own Postgres, own compose, own dall-m-net), reached
     # the same way Splunk/ThreatQ/Confluence are, by URL rather than container
-    # name. host.docker.internal reaches its published port 8000 when it runs
+    # name. host.docker.internal reaches its published port 8001 when it runs
     # on the same machine; point this at wherever it actually runs otherwise.
-    LLM_SERVER_URL: str = "http://host.docker.internal:8000"
+    LLM_SERVER_URL: str = "http://host.docker.internal:8001"
     # Path to run an agent. `{agent}` is substituted; a server that takes the
     # agent in the body instead can use a static path and LLM_AGENT_FIELD.
     # Agent-Server: POST /v1/agents/{slug}/chat.
