@@ -267,7 +267,7 @@ class PlaybookStore:
 
     # ── Matching ────────────────────────────────────────────────────────────
 
-    async def match(self, alert_name: str) -> dict:
+    async def match(self, alert_name: str, use_case_id: str = "") -> dict:
         index = self._index  # one snapshot for the whole answer, whatever a rebuild does meanwhile
         if index is None:
             return {
@@ -280,7 +280,7 @@ class PlaybookStore:
                 "corpus": self._corpus(None),
             }
 
-        result = index.router.match(alert_name)
+        result = index.router.match(alert_name, use_case_id)
         if not result["matched"] and result["how"] == "miss":
             semantic = await self._semantic(index, alert_name)
             if semantic.get("matched"):

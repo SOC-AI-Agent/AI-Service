@@ -230,3 +230,48 @@ def test_semantic_off_loads_no_model(tmp_path, client):
     assert result["matched"] is False
     assert "PLAYBOOK_SEMANTIC is off" in result["note"]
     assert embedder.documents == [] and embedder.queries == []
+
+
+# ── Matching by use case id ─────────────────────────────────────────────────
+
+WITH_ID = page("501", [("Alert Name", "Threat - Suspicious IP Callback"), ("Use Case ID", "<p>UC-CAT-012</p>")])
+
+
+def match_id(client, name, use_case_id=None):
+    body = {"alert_name": name} if use_case_id is None else {"alert_name": name, "use_case_id": use_case_id}
+    resp = client.post("/playbooks/match", json=body, headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.fixture
+def with_id(client):
+    assert client.put("/playbooks/index", json={"pages": CORPUS + [WITH_ID]}, headers=AUTH).status_code == 200
+    return client
+
+
+def test_the_id_the_soar_sent_wins_over_a_different_name(with_id):
+    result = match_id(with_id, "Some Renamed Detection", "uc-cat-012")
+    assert (result["how"], result["playbook"]["page_id"], result["use_case_id"]) == ("id", "501", "UC-CAT-012")
+
+
+def test_an_id_in_the_alert_name_is_used_when_none_is_sent(with_id):
+    result = match_id(with_id, "Threat - UC-CAT-012 - Callback from Client Detected by ThreatQ - Rule")
+    assert (result["how"], result["playbook"]["page_id"]) == ("id", "501")
+
+
+def test_an_id_no_playbook_carries_falls_back_to_the_name(with_id):
+    result = match_id(with_id, "Excessive Failed Logins", "UC-NOPE-999")
+    assert (result["how"], result["playbook"]["page_id"]) == ("exact", "101")
+
+
+def test_two_pages_claiming_one_id_are_reported(client):
+    twin = page("502", [("Alert Name", "Another"), ("Use Case ID", "UC-CAT-012")])
+    body = client.put("/playbooks/index", json={"pages": [WITH_ID, twin]}, headers=AUTH).json()
+    assert body["conflicts"] == [{"use_case_id": "UC-CAT-012", "pages": ["501", "502"]}]
+
+
+@pytest.mark.parametrize("bad", ["UC 012", "x" * 65, "-UC"])
+def test_a_malformed_use_case_id_is_a_422(client, bad):
+    resp = client.post("/playbooks/match", json={"alert_name": "x", "use_case_id": bad}, headers=AUTH)
+    assert resp.status_code == 422

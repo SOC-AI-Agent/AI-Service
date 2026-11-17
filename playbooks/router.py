@@ -19,7 +19,7 @@ import difflib
 import logging
 import re
 
-from playbooks.extract import Playbook
+from playbooks.extract import Playbook, use_case_id_in, without_use_case_id
 
 logger = logging.getLogger("playbooks.router")
 
@@ -39,10 +39,22 @@ class AlertRouter:
         self.cutoff = cutoff
         self.by_page: dict[str, Playbook] = {p.page_id: p for p in playbooks}
         self.table: dict[str, tuple[str, str, str]] = {}   # key -> (page, shown, how)
+        self.by_id: dict[str, str] = {}                     # use case id -> page
         self.conflicts: list[dict] = []
 
         for playbook in playbooks:
+            uc = playbook.use_case_id.strip().upper()
+            if uc:
+                if uc in self.by_id and self.by_id[uc] != playbook.page_id:
+                    # Same rule as two primary names: reported, not resolved by load order.
+                    self.conflicts.append({"use_case_id": uc, "pages": [self.by_id[uc], playbook.page_id]})
+                else:
+                    self.by_id[uc] = playbook.page_id
             names = [(playbook.alert_name, "alert_name")]
+            # The title leads with its use case code; an alert sent with the bare name still matches.
+            bare = without_use_case_id(playbook.alert_name)
+            if bare and bare != playbook.alert_name:
+                names.append((bare, "alert_name"))
             names += [(a, "alias") for a in playbook.aliases]
             for name, source in names:
                 key = normalise(name)
@@ -69,18 +81,31 @@ class AlertRouter:
         for clash in self.conflicts:
             logger.warning(
                 "two playbooks claim %r: %s — one of them will never be reached",
-                clash["name"], " and ".join(clash["pages"]),
+                clash.get("name") or clash.get("use_case_id"), " and ".join(clash["pages"]),
             )
 
-    def match(self, alert_name: str) -> dict:
+    def match(self, alert_name: str, use_case_id: str = "") -> dict:
         """
         The playbook for this alert, with how it was found.
+
+        The use case id first: the one the SOAR sent, else a code in the alert
+        name. It names the detection exactly, whatever it is called today. An id
+        no playbook carries falls through to the name, so detections whose
+        playbooks have no id yet still match.
 
         `how` is returned rather than implied: a fuzzy match is a guess that
         happened to clear a threshold, and an analyst reading criteria for a
         detection with a slightly different name should be told that is what
         they are reading.
         """
+        uc = (use_case_id or "").strip().upper() or use_case_id_in(alert_name)
+        if uc in self.by_id:
+            playbook = self.by_page[self.by_id[uc]]
+            return {
+                "matched": True, "how": "id", "use_case_id": uc,
+                "matched_name": playbook.alert_name, "playbook": playbook.as_dict(),
+            }
+
         key = normalise(alert_name)
         if not key:
             return {"matched": False, "how": "empty", "playbook": None}
@@ -122,6 +147,7 @@ class AlertRouter:
         return {
             "playbooks": len(self.by_page),
             "names": len(self.table),
+            "use_case_ids": len(self.by_id),
             "by_source": by_source,
             "conflicts": self.conflicts,
         }

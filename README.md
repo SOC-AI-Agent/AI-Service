@@ -43,13 +43,25 @@ Every route except `/health` needs `Authorization: Bearer $AI_SERVICE_AUTH_TOKEN
 | `GET /playbooks` | Show what is indexed. |
 | `GET /health` | Liveness, and whether Agent-Server answers. |
 
+## Playbook pages
+
+A Confluence page is a playbook when it has an alert name. Write it the SOC way:
+the page title is the alert name, a version-history table (first column
+`Version`) is the only table, and each field is a heading with its text under it:
+`Use Case ID`, `Use Case Category`, `Aliases`, `Rule Description`,
+`True Condition`, `False Condition`, `Steps to Work`, `Splunk Query` (the detection
+rule's SPL, for people; the backend plans its own searches and does not read it). A
+heading's colon or `(For Tier 1/Shift lead)` does not matter. Pages written as
+a two-column Page Properties table still work.
+
 ## Playbook matching
 
-Three tiers, cheapest first. A later tier runs only when the earlier one finds
+Four tiers, surest first. A later tier runs only when the earlier one finds
 nothing.
 
 | Tier | Matches | Setting |
 | --- | --- | --- |
+| `id` | The use case id: `use_case_id` from the SOAR, else a code like `UC-CAT-012` in the alert name. | — |
 | `exact` | The name or an alias. | — |
 | `fuzzy` | A renamed detection, by spelling. | `PLAYBOOK_FUZZY_CUTOFF` |
 | `semantic` | Different words for the same detection, by embedding. | `PLAYBOOK_SEMANTIC_MIN_SCORE`, `PLAYBOOK_SEMANTIC_MIN_MARGIN` |

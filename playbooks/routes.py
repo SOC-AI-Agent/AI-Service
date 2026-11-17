@@ -35,6 +35,8 @@ class IndexRequest(BaseModel):
 
 class MatchRequest(BaseModel):
     alert_name: str = Field(min_length=1, max_length=512)
+    # The SOC's use case code, when the SOAR sent one. Matched before the name.
+    use_case_id: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @router.put("/index", summary="Replace the playbook corpus with these pages")
@@ -54,11 +56,12 @@ async def index_pages(body: IndexRequest) -> dict:
 @router.post("/match", summary="Which playbook covers this alert")
 async def match(body: MatchRequest) -> dict:
     """
-    `how` says how it was found: `exact`, `fuzzy` (by spelling) or `semantic`
-    (by meaning, with the field that matched). `miss` is a searched corpus with
-    nothing close enough; `unindexed` means nothing has been indexed yet.
+    `how` says how it was found: `id` (the use case id, sent or in the name),
+    `exact`, `fuzzy` (by spelling) or `semantic` (by meaning, with the field
+    that matched). `miss` is a searched corpus with nothing close enough;
+    `unindexed` means nothing has been indexed yet.
     """
-    return await get_store().match(body.alert_name.strip())
+    return await get_store().match(body.alert_name.strip(), body.use_case_id or "")
 
 
 @router.get("", summary="What is indexed")
