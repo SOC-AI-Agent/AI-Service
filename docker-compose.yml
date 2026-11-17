@@ -22,6 +22,9 @@ services:
     # for anything on the company network to run agents on the one model slot
     # the SOC's alerts queue for.
     env_file: [.env]
+    environment:
+      # The server below, unless .env names another one.
+      QDRANT_URL: ${QDRANT_URL:-http://soc-qdrant:6333}
     volumes:
       # The playbook index. A restart loads it instead of embedding every page again.
       - playbook-index:/data
@@ -30,11 +33,25 @@ services:
     # Docker Desktop resolves host.docker.internal without this; Linux needs it.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on: [soc-qdrant]
+    restart: unless-stopped
+    networks: [soc-network]
+
+  # The vector database behind playbook matching and search (QDRANT_URL in
+  # .env). No ports: only soc-ai reads it. If it is down, matching by use case
+  # id and by name carry on, and /playbooks says why matching by meaning is off;
+  # on a fresh volume soc-ai re-embeds the playbooks it has on file.
+  soc-qdrant:
+    image: qdrant/qdrant:v1.15.4
+    container_name: soc-qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
     restart: unless-stopped
     networks: [soc-network]
 
 volumes:
   playbook-index:
+  qdrant-data:
 
 networks:
   # Shared by AI-service/Backend/Frontend/MCP-Server's stacks, reached by

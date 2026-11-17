@@ -8,7 +8,10 @@
    them and answers "which playbook covers this alert".
 
 It has no database, no queue and no users. The one thing it keeps is the
-playbook index, a single file on the `playbook-index` volume. FastAPI.
+playbook index: the playbooks as a JSON file on the `playbook-index` volume,
+and one vector per description, condition and runbook step in Qdrant
+(`soc-qdrant`, or embedded when `QDRANT_URL` is empty). `POST /playbooks/search`
+retrieves passages from it. FastAPI.
 
 ![Architecture: the Backend calls AI-Service, which calls Agent-Server by URL](docs/architecture.png)
 

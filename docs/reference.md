@@ -12,12 +12,13 @@ Two jobs, both for the core backend and nobody else:
 It owns **no database, no queue, no job state and no users**. Job rows,
 retries, API keys and the audit trail live in the core backend
 (`../Backend`, NestJS), the only thing that writes to Postgres. The one thing
-kept here is the playbook index, a single file on the `playbook-index` volume.
+kept here is the playbook index: the playbooks as one JSON file on the
+`playbook-index` volume, their vectors in Qdrant (`vectordb/`).
 
 ```
 soc-core-worker ──POST /analyze──────────► soc-ai ──POST /v1/agents/{slug}/chat──► Agent-Server
 soc-core-worker ──PUT  /playbooks/index──► soc-ai      (pages the worker read from Confluence's REST API)
-soc-core-worker ──POST /playbooks/match──► soc-ai
+soc-core-worker ──POST /playbooks/match──► soc-ai ──► soc-qdrant (tier 4 only)
 ```
 
 Agent-Server is a separate system — its own repo, own Postgres, own compose —
@@ -44,8 +45,10 @@ POST /llm-probe          same body; returns the request sent and the raw stream 
 
 PUT  /playbooks/index    {source, pages: [{id, title, version, url, body}], allow_empty?}
                       -> {playbooks, pages, skipped, conflicts, embedded, reused, took_ms, semantic}
-POST /playbooks/match    {alert_name}
+POST /playbooks/match    {alert_name, use_case_id?}
                       -> {matched, how, matched_name, matched_field?, similarity?, playbook, note?, corpus}
+POST /playbooks/search   {query, page_id?, fields?, k?}
+                      -> {hits: [{page_id, alert_name, use_case_id, field, step, text, score}], note?, corpus}
 GET  /playbooks          what is indexed, and whether matching by meaning works
 
 GET  /health             public
@@ -67,27 +70,62 @@ mean the stored prompt was not necessarily the prompt that ran.
 (`FIELD_LABELS`), and reduces each cell to its text — the Confluence connector
 used to keep a cell's XHTML, so a name the editor wrapped in `<p>` never matched
 exactly. A page with no alert name is not a playbook and is listed under
-`skipped`. `splunk_query` must be JSON (parameters, never SPL); a code macro's
-CDATA is read verbatim.
+`skipped`. `splunk_query` as JSON is parameters the backend runs; as SPL (the
+SOC way) it is kept as `detection_spl` — read by the model and the analyst,
+never run — and the indexes and sourcetypes it names become `detection_scope`.
+`Steps to Work` is split into `steps`, one per line, numbering removed. A code
+macro's CDATA is read verbatim.
+
+**What is stored**, the "Storage (custom) for Search-Confluence" split:
+
+| | Fields | Where |
+| --- | --- | --- |
+| Embedded | rule description, true condition, false condition, each runbook step | one Qdrant point each, payload: page, field, step, text, alert name, use case id, version |
+| Matched exactly | alert name / use case, use case id, aliases | `router.py`, in memory |
+| Metadata | splunk query / detection SPL, steps, version, target audience, contact | the JSON file, returned with the playbook |
 
 **Matching**, cheapest first, each tier only when the one before cannot answer:
 
 | Tier | `how` | Handles | Cost |
 | --- | --- | --- | --- |
-| 1 | `exact` | the name or an alias, case and spacing folded | ~0 ms |
-| 2 | `fuzzy` | a renamed detection, by spelling (`PLAYBOOK_FUZZY_CUTOFF`) | ~0 ms |
-| 3 | `semantic` | different words for the same detection | ~5 ms, first query per name only |
+| 1 | `id` | the use case id the SOAR sent, or one in the alert name | ~0 ms |
+| 2 | `exact` | the name or an alias, case and spacing folded | ~0 ms |
+| 3 | `fuzzy` | a renamed detection, by spelling (`PLAYBOOK_FUZZY_CUTOFF`) | ~0 ms |
+| 4 | `semantic` | different words for the same detection (Qdrant) | ~5 ms, first query per name only |
 
 Anything else is `miss` (with how close the nearest came), and `unindexed`
 until the backend's first sync. A wrong playbook is worse than none — the
-analyst reads criteria written for another detection — so tier 3 answers only
+analyst reads criteria written for another detection — so tier 4 answers only
 when the best playbook clears `PLAYBOOK_SEMANTIC_MIN_SCORE` **and** leads the
-next one by `PLAYBOOK_SEMANTIC_MIN_MARGIN`.
+next one by `PLAYBOOK_SEMANTIC_MIN_MARGIN`, and searches only the description
+and conditions, never the steps.
 
-**What is embedded:** the rule description and the true and false conditions —
-not the name. The query is always an alert name, and names are templated: on
-the name alone, "Excessive DNS Failures" scored 0.804 against "Excessive Failed
-Logins", higher than most genuine renames. Names are what tiers 1 and 2 are for.
+**One alert, one use case.** When the alert has a use case id (sent by the
+SOAR, or written in its name) and no playbook carries it, tiers 2 to 4 may only
+return a playbook that has no use case id yet. A name that reaches a playbook of
+a *different* use case is refused as `use_case_mismatch`, with a note naming
+both ids, rather than answered with another detection's criteria.
+
+**What is embedded:** the rule description, the true and false conditions and
+the runbook steps — not the name. The query is always an alert name, and names
+are templated: on the name alone, "Excessive DNS Failures" scored 0.804 against
+"Excessive Failed Logins", higher than most genuine renames. Names are what
+tiers 1 to 3 are for.
+
+**Search** (`POST /playbooks/search`) is retrieval rather than matching: the
+nearest passages to a question, steps included, with no threshold — optionally
+within one playbook (`page_id`) or one kind of passage (`fields`). Each hit is
+quoted with its playbook, field and step number, so whoever reads it can cite it.
+
+**The vector store** (`vectordb/qdrant.py`) is Qdrant behind five calls:
+ensure a collection, read vectors by digest, upsert, delete what is gone, and
+search with payload filters. One collection per embedding model
+(`playbooks__<model>`): vectors of two models are not comparable, so a model
+change fills a new collection and drops the old one. `QDRANT_URL` names a
+server (`soc-qdrant` in `docker-compose.yml`); unset, Qdrant runs embedded with
+its files at `QDRANT_PATH`. A fresh or emptied Qdrant is refilled at startup
+from the playbooks on file. If Qdrant is unreachable, tiers 1 to 3 carry on and
+`/playbooks` says why tier 4 is off.
 
 **Calibration**, `bge-small-en-v1.5` on the notebook's six sample playbooks
 (`../MCP-Server/notebooks/playbook_rag.ipynb`) and 26 alert names:
@@ -100,9 +138,9 @@ Logins", higher than most genuine renames. Names are what tiers 1 and 2 are for.
 `bge-base-en-v1.5` did no better. Six playbooks is not the real wiki: rerun the
 calibration on the real pages before relying on tier 3.
 
-**Embedding only what changed.** Each embedded field carries a digest of its
-text. A sync reuses the vector of every field whose text and model are
-unchanged, so a sync where nothing moved embeds nothing (measured: 18 fields
+**Embedding only what changed.** Each point carries a digest of its text. A
+sync reuses the stored vector of every text already in the model's collection,
+so a sync where nothing moved embeds nothing (measured before the move to Qdrant: 18 fields
 embedded in 0.27 s the first time, 0 in 3 ms the second), and an edited page
 costs its changed fields only. Query vectors are cached per alert name.
 
@@ -114,29 +152,31 @@ not a choice against a shared one. It is baked into the image at build time
 and the hub is switched off at
 runtime (`HF_HUB_OFFLINE=1`). Every encode runs in a worker thread, so a sync
 never stalls an `/analyze` that is streaming. Loading takes ~10 s and is done in
-the background at startup. If the model cannot be loaded, tiers 1 and 2 carry
-on and `/playbooks` says why tier 3 is off.
+the background at startup. If the model cannot be loaded, tiers 1 to 3 carry
+on and `/playbooks` says why tier 4 is off.
 
 **Refusals.** An index request that would replace a non-empty index with zero
 playbooks is a `409` unless it says `allow_empty: true` — a sync that finds
 nothing is far more often a broken read than an emptied wiki. More than
 `PLAYBOOK_MAX_PAGES` pages is a `422`. The index file is written to a temporary
-name and renamed over the old one.
+name and renamed over the old one; Qdrant is written before it, and a hit on a
+page the file does not list is ignored, so the two never disagree in an answer.
 
 ## Files
 
 | File | Role |
 | --- | --- |
-| `main.py` | `/analyze`, `/llm-probe`, `/health`; startup loads the index and warms the model. |
+| `main.py` | `/analyze`, `/llm-probe`, `/health`; startup loads the index, warms the model and refills Qdrant if it is missing vectors. |
 | `core/auth.py` | The bearer gate. |
 | `core/config.py` | Env to typed settings. |
 | `services/llm_client.py`, `services/sse.py` | The LLM server call and its stream reader. |
-| `playbooks/extract.py` | Page Properties -> playbook records. |
-| `playbooks/router.py` | Tiers 1 and 2. |
+| `playbooks/extract.py` | Page Properties -> playbook records, steps, detection SPL and its scope. |
+| `playbooks/router.py` | Tiers 1 to 3, and the use case guard. |
 | `playbooks/embedder.py` | The embedding model, loaded on first use. |
-| `playbooks/store.py` | The index: build, reuse, save, load, tier 3. |
+| `playbooks/store.py` | The index: build, reuse, save, load, tier 4, passage search. |
 | `playbooks/routes.py` | `/playbooks`. |
-| `tests/` | pytest, with a stand-in embedder: no torch, no download. |
+| `vectordb/qdrant.py` | The vector store: Qdrant server, embedded or in memory. |
+| `tests/` | pytest, with a stand-in embedder and an in-memory Qdrant: no torch, no download, no server. |
 
 ## Agent-Server
 
@@ -281,8 +321,12 @@ See `.env.example`; each setting is explained there. The ones that matter:
 | `LLM_RUN_PATH` | `/v1/agents/{agent}/chat` | Agent-Server's invoke route. |
 | `LLM_INPUT_FIELD` | `message` | Agent-Server's `AgentChatRequest.message`. |
 | `LLM_HEALTH_PATH` | `/` | Agent-Server has no `/health`. |
-| `PLAYBOOK_INDEX_PATH` | `/data/playbook-index.npz` | On the `playbook-index` volume. |
-| `PLAYBOOK_SEMANTIC` | `true` | `false` = tiers 1 and 2 only, no model loaded. |
+| `PLAYBOOK_INDEX_PATH` | `/data/playbook-index.json` | On the `playbook-index` volume. An old `.npz` path is read as the `.json` beside it. |
+| `PLAYBOOK_SEMANTIC` | `true` | `false` = tiers 1 to 3 only, no model loaded, no Qdrant. |
+| `QDRANT_URL` | empty | A Qdrant server. Empty: embedded, files at `QDRANT_PATH`. `docker-compose.yml` sets `http://soc-qdrant:6333` when this is empty. |
+| `QDRANT_API_KEY` | empty | Only if the server has one. |
+| `QDRANT_PATH` | `/data/qdrant` | Embedded mode only. |
+| `QDRANT_TIMEOUT_S` | `10` | Per call to the server. |
 | `PLAYBOOK_SEMANTIC_MIN_SCORE` / `_MIN_MARGIN` | `0.75` / `0.05` | See calibration above. |
 | `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Must be the model the image was built with (`--build-arg EMBED_MODEL=`). |
 

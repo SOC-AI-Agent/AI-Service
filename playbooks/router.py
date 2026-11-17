@@ -32,6 +32,38 @@ def normalise(name: str) -> str:
     return _WS.sub(" ", _CLEAN.sub(" ", (name or "").lower())).strip()
 
 
+def compatible(playbook: Playbook, use_case_id: str) -> bool:
+    """
+    May this playbook answer an alert of this use case, when no id matched?
+
+    An alert from the SOAR is one use case, exactly. A playbook that carries a
+    different use case id is written for a different detection, however close
+    its name or its wording — reading its criteria against this alert is the
+    failure this service exists to prevent. A playbook with no id yet is
+    allowed: its page has simply not been given one.
+    """
+    if not use_case_id:
+        return True
+    own = (playbook.use_case_id or "").strip().upper()
+    return not own or own == use_case_id
+
+
+def mismatch(alert_name: str, use_case_id: str, playbook: Playbook, how: str) -> dict:
+    """A name that reaches a playbook of another use case: refused, and said so."""
+    logger.warning("%s match %r -> %r refused: use case %s, playbook is %s",
+                   how, alert_name, playbook.alert_name, use_case_id, playbook.use_case_id)
+    return {
+        "matched": False, "how": "use_case_mismatch", "playbook": None,
+        "use_case_id": use_case_id,
+        "note": (
+            f"The alert is use case {use_case_id}, and no playbook carries that id. "
+            f"Its name reaches {playbook.alert_name!r} ({how}), but that playbook is "
+            f"use case {playbook.use_case_id}, a different detection, so its criteria "
+            f"were not used. Give the {use_case_id} playbook page its Use Case ID."
+        ),
+    }
+
+
 class AlertRouter:
     """Rebuilt from the corpus on every index; holds no state between them."""
 
@@ -84,6 +116,11 @@ class AlertRouter:
                 clash.get("name") or clash.get("use_case_id"), " and ".join(clash["pages"]),
             )
 
+    @staticmethod
+    def use_case_for(alert_name: str, use_case_id: str = "") -> str:
+        """The use case id the SOAR sent, else one written in the alert name, else ''."""
+        return (use_case_id or "").strip().upper() or use_case_id_in(alert_name)
+
     def match(self, alert_name: str, use_case_id: str = "") -> dict:
         """
         The playbook for this alert, with how it was found.
@@ -98,7 +135,7 @@ class AlertRouter:
         detection with a slightly different name should be told that is what
         they are reading.
         """
-        uc = (use_case_id or "").strip().upper() or use_case_id_in(alert_name)
+        uc = self.use_case_for(alert_name, use_case_id)
         if uc in self.by_id:
             playbook = self.by_page[self.by_id[uc]]
             return {
@@ -112,20 +149,26 @@ class AlertRouter:
 
         hit = self.table.get(key)
         if hit:
+            playbook = self.by_page[hit[0]]
+            if not compatible(playbook, uc):
+                return mismatch(alert_name, uc, playbook, "exact")
             return {
                 "matched": True, "how": "exact", "matched_name": hit[1],
-                "playbook": self.by_page[hit[0]].as_dict(),
+                "playbook": playbook.as_dict(),
             }
 
         near = difflib.get_close_matches(key, self._keys, n=1, cutoff=self.cutoff)
         if near:
             page, shown, _ = self.table[near[0]]
+            playbook = self.by_page[page]
+            if not compatible(playbook, uc):
+                return mismatch(alert_name, uc, playbook, "fuzzy")
             score = difflib.SequenceMatcher(None, key, near[0]).ratio()
             logger.info("fuzzy match %r -> %r (%.2f)", alert_name, shown, score)
             return {
                 "matched": True, "how": "fuzzy", "matched_name": shown,
                 "similarity": round(score, 3),
-                "playbook": self.by_page[page].as_dict(),
+                "playbook": playbook.as_dict(),
             }
 
         # Said plainly. "No playbook" is a fact an analyst can act on; a

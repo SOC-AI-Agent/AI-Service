@@ -170,7 +170,7 @@ def test_an_integer_page_id_is_accepted(client):
 
 def test_a_restart_loads_the_index_without_embedding_again(indexed, store):
     fresh_embedder = FakeEmbedder()
-    restarted = make_store(store.path, fresh_embedder)
+    restarted = make_store(store.path, fresh_embedder, store.vectordb)
     restarted.load()
     store_module.set_store(restarted)
 
@@ -185,7 +185,7 @@ def test_a_restart_loads_the_index_without_embedding_again(indexed, store):
 def test_a_different_model_re_embeds_everything(indexed, store):
     other = FakeEmbedder()
     other.name = "another-model"
-    restarted = make_store(store.path, other)
+    restarted = make_store(store.path, other, store.vectordb)
     restarted.load()
     store_module.set_store(restarted)
     body = indexed.put("/playbooks/index", json={"pages": CORPUS}, headers=AUTH).json()
@@ -193,8 +193,8 @@ def test_a_different_model_re_embeds_everything(indexed, store):
 
 
 def test_an_unreadable_index_file_starts_empty(tmp_path):
-    path = tmp_path / "index.npz"
-    path.write_bytes(b"not an npz")
+    path = tmp_path / "index.json"
+    path.write_bytes(b"not json")
     s = make_store(path, FakeEmbedder())
     s.load()
     assert s.status()["indexed"] is False
@@ -208,7 +208,7 @@ def test_the_write_is_atomic(indexed, store):
 
 def test_without_a_model_names_still_match(tmp_path, client):
     broken = FakeEmbedder(fail=True)
-    s = make_store(tmp_path / "broken.npz", broken)
+    s = make_store(tmp_path / "broken.json", broken)
     store_module.set_store(s)
 
     body = client.put("/playbooks/index", json={"pages": CORPUS}, headers=AUTH).json()
@@ -223,7 +223,7 @@ def test_without_a_model_names_still_match(tmp_path, client):
 
 def test_semantic_off_loads_no_model(tmp_path, client):
     embedder = FakeEmbedder()
-    s = make_store(tmp_path / "off.npz", embedder, semantic=False)
+    s = make_store(tmp_path / "off.json", embedder, semantic=False)
     store_module.set_store(s)
     client.put("/playbooks/index", json={"pages": CORPUS}, headers=AUTH)
     result = match(client, "many failed login attempts against user accounts")

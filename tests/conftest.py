@@ -1,6 +1,7 @@
 """
 In-process tests: the app under TestClient, a stand-in embedder, a temporary
-index file. Nothing here needs torch, a model download, or the LLM server.
+index file and an in-memory Qdrant. Nothing here needs torch, a model
+download, a Qdrant server, or the LLM server.
 """
 
 import asyncio
@@ -23,7 +24,10 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 # asks the LLM server, which here is a closed port that refuses at once.
 os.environ["AI_SERVICE_AUTH_TOKEN"] = TOKEN
 os.environ["LLM_SERVER_URL"] = "http://127.0.0.1:9"
-os.environ["PLAYBOOK_INDEX_PATH"] = str(ROOT / "tests" / ".unused-index.npz")
+os.environ["PLAYBOOK_INDEX_PATH"] = str(ROOT / "tests" / ".unused-index.json")
+# Never a real server or the volume path from a developer's .env.
+os.environ["QDRANT_URL"] = ""
+os.environ["QDRANT_PATH"] = ""
 # Set explicitly rather than left to fall through to .env.example's defaults
 # (which a developer's own .env may not match, or may not even be present at
 # all in CI): test_agent_server_contract.py checks these are Agent-Server's
@@ -35,6 +39,7 @@ os.environ["LLM_HEALTH_PATH"] = "/"
 
 from playbooks import store as store_module  # noqa: E402
 from playbooks.embedder import EmbedderUnavailable  # noqa: E402
+from vectordb import VectorDB  # noqa: E402
 
 DIM = 256
 _WORD = re.compile(r"[a-z0-9]+")
@@ -118,9 +123,11 @@ DNS = page("103", [
 CORPUS = [FAILED_LOGINS, PHISHING, DNS]
 
 
-def make_store(path, embedder=None, **kwargs):
+def make_store(path, embedder=None, vectordb=None, **kwargs):
+    """A store over an in-memory Qdrant. Pass another store's `vectordb` to share
+    one, the way two runs of the service share the Qdrant server."""
     kwargs.setdefault("min_score", 0.5)
-    return store_module.PlaybookStore(path, embedder, **kwargs)
+    return store_module.PlaybookStore(path, embedder, vectordb or VectorDB(), **kwargs)
 
 
 @pytest.fixture
@@ -130,7 +137,7 @@ def embedder():
 
 @pytest.fixture
 def store(tmp_path, embedder):
-    s = make_store(tmp_path / "index.npz", embedder)
+    s = make_store(tmp_path / "index.json", embedder)
     store_module.set_store(s)
     yield s
     store_module.set_store(None)

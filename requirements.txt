@@ -1,4 +1,4 @@
-# The HTTP server and client, and numpy for the playbook index. Postgres,
+# The HTTP server and client, numpy and Qdrant for the playbook index. Postgres,
 # Redis and issuing tokens belong in ../Backend. The embedding model's own
 # dependencies are in requirements-embed.txt: they are large, and the tests
 # do not need them.
@@ -8,3 +8,7 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 httpx==0.28.1
 numpy==2.5.3
+# The vector store behind playbook matching and search (vectordb/). Talks to the
+# Qdrant server in docker-compose, or runs embedded when QDRANT_URL is unset.
+# Same minor version as the server image, so the client's version check is quiet.
+qdrant-client==1.15.1

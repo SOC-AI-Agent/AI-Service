@@ -11,6 +11,7 @@ from conftest import AUTH, ROOT, TOKEN
 PROTECTED = [
     ("get", "/playbooks", None),
     ("post", "/playbooks/match", {"alert_name": "x"}),
+    ("post", "/playbooks/search", {"query": "x"}),
     ("put", "/playbooks/index", {"pages": []}),
     ("post", "/analyze", {"rendered_prompt": "x"}),
     ("post", "/llm-probe", {"rendered_prompt": "x"}),

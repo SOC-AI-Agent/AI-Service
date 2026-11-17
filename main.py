@@ -24,15 +24,20 @@ if not settings.AI_SERVICE_AUTH_TOKEN:
 
 
 async def _warm(store) -> None:
-    """Load the embedding model now, off the event loop, so the first alert
-    that needs matching by meaning does not pay for it inside its timeout."""
-    if store.embedder is None or not hasattr(store.embedder, "warm"):
+    """Load the embedding model and check the vectors now, off the event loop,
+    so the first alert that needs matching by meaning does not pay for either
+    inside its timeout."""
+    if store.embedder is None:
         return
-    try:
-        await run_in_threadpool(store.embedder.warm)
-    except EmbedderUnavailable as exc:
-        store.semantic_error = str(exc)
-        logger.error("matching by meaning is off: %s", exc)
+    if hasattr(store.embedder, "warm"):
+        try:
+            await run_in_threadpool(store.embedder.warm)
+        except EmbedderUnavailable as exc:
+            store.semantic_error = str(exc)
+            logger.error("matching by meaning is off: %s", exc)
+            return
+    # A fresh Qdrant volume, or one another model filled: embed what it is missing.
+    await store.ensure_vectors()
 
 
 @asynccontextmanager
@@ -44,6 +49,8 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         warming.cancel()
+        if store.vectordb is not None:
+            store.vectordb.close()
 
 
 app = FastAPI(

@@ -39,9 +39,14 @@ MATCHED_FIELDS = ["alert_name", "rule_description", "true_condition", "false_con
 # What the analyst then acts on. Never used for matching: embedding a contact
 # would match on people's names and a version number carries no meaning at all.
 METADATA_FIELDS = [
-    "use_case_id", "use_case_category", "version", "splunk_query", "work_around",
-    "target_audience", "contact",
+    "use_case_id", "use_case_category", "version", "splunk_query", "detection_spl",
+    "work_around", "target_audience", "contact",
 ]
+# Runbook steps are split out of work_around, and a detection's SPL is kept as
+# text. Capped: a page is written by people, and a pasted log is not a step.
+MAX_STEPS = 30
+MAX_STEP_CHARS = 1000
+MAX_SPL_CHARS = 4000
 # A titled page counts as a playbook only with one of these: the space home page
 # has a "Description" heading too, and is not a detection.
 _PLAYBOOK_EVIDENCE = ("use_case_id", "true_condition", "false_condition", "work_around")
@@ -67,6 +72,8 @@ FIELD_LABELS = {
     "false condition": "false_condition",
     "version": "version",
     "splunk query": "splunk_query",
+    "splunk search": "splunk_query",
+    "spl": "splunk_query",
     "work around": "work_around",
     "workaround": "work_around",
     "step to work": "work_around",
@@ -98,11 +105,26 @@ class Playbook:
     # from these (Backend: modules/enrichment/spl.ts); SPL copied out of a wiki
     # anyone in the space can edit is not something to run.
     splunk_query: dict | None = None
+    # The detection rule's own SPL, when the page holds SPL rather than JSON
+    # parameters (the SOC way). Text for the model and the analyst to read, and
+    # the source of `detection_scope` — never run: SPL copied out of a wiki is
+    # not something to execute.
+    detection_spl: str = ""
     work_around: str = ""
     target_audience: str = ""
     contact: str = ""
     url: str = ""
     source: str = "confluence"
+
+    @property
+    def steps(self) -> list[str]:
+        """work_around as numbered steps, so a model can cite one and a requirement can say which it serves."""
+        return split_steps(self.work_around)
+
+    @property
+    def detection_scope(self) -> dict[str, list[str]]:
+        """The indexes and sourcetypes the detection SPL reads. Checked against the catalogue by the backend."""
+        return spl_scope(self.detection_spl)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -113,6 +135,8 @@ class Playbook:
             "source": self.source,
             **{f: getattr(self, f) for f in MATCHED_FIELDS if f != "alert_name"},
             **{f: getattr(self, f) for f in METADATA_FIELDS},
+            "steps": self.steps,
+            "detection_scope": self.detection_scope,
         }
 
     @classmethod
@@ -243,6 +267,50 @@ def without_history(xhtml: str) -> str:
     return _TABLE.sub(lambda m: "" if _history_versions(m.group(1)) else m.group(0), xhtml or "")
 
 
+# "1.", "2)", "Step 3:", "-", "•" at the start of a line, followed by a space.
+_STEP_MARK = re.compile(r"^\s*(?:(?:step\s*)?\d+\s*[.):\-]|[-*•▪●◦])(?=\s)\s*", re.I)
+
+
+def split_steps(text: str) -> list[str]:
+    """
+    'Steps to Work' as a list, one step per line, numbering and bullets removed.
+
+    A line is a step because cell_text already turned each <li>, <p> and <br/>
+    into one. The numbers are not kept: the order is the number, so "[PB:step 2]"
+    always means the second line, whatever the editor typed in front of it.
+    """
+    steps = []
+    for line in (text or "").split("\n"):
+        body = _STEP_MARK.sub("", line.strip(), count=1).strip()
+        if body:
+            steps.append(body[:MAX_STEP_CHARS])
+    return steps[:MAX_STEPS]
+
+
+_SPL_TERM = re.compile(r'\b(index|sourcetype)\s*(?:=|::)\s*(?:"([^"]+)"|([^\s|()\]"]+))', re.I)
+
+
+def spl_scope(spl: str) -> dict[str, list[str]]:
+    """
+    {"index": [...], "sourcetype": [...]} named with `=` in the SPL, in order, no duplicates.
+
+    A wildcard ("index=*", "sourcetype=fgt_*") names no one place and is left
+    out: the backend uses this to aim searches, and a pattern is not an aim.
+    """
+    out: dict[str, list[str]] = {"index": [], "sourcetype": []}
+    for key, quoted, bare in _SPL_TERM.findall(spl or ""):
+        value = (quoted or bare).strip()
+        bucket = out[key.lower()]
+        if value and "*" not in value and value not in bucket:
+            bucket.append(value)
+    return out
+
+
+def _looks_like_json(value: str) -> bool:
+    value = (value or "").strip().strip("`").lstrip()
+    return value.lower().startswith("json") or value.startswith("{")
+
+
 def _split_aliases(value: str) -> list[str]:
     return [a.strip() for a in re.split(r"[,;\n]", value or "") if a.strip()]
 
@@ -294,6 +362,9 @@ def from_rows(page_id: str, rows: dict[str, str], url: str = "",
             fields["aliases"] = _split_aliases(text)
         elif name == "splunk_query":
             fields["splunk_query"] = _parse_query(text)
+            # SPL rather than parameters: kept to read, never to run.
+            if fields["splunk_query"] is None and text.strip() and not _looks_like_json(text):
+                fields["detection_spl"] = text.strip()[:MAX_SPL_CHARS]
         elif name == "use_case_id":
             fields["use_case_id"] = text.split("\n")[0].strip()
         else:

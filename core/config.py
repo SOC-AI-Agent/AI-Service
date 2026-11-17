@@ -61,9 +61,10 @@ class Settings(BaseSettings):
     # ── Playbook index ───────────────────────────────────────────────────────
     # The backend reads the playbook pages out of Confluence (through the
     # connector) and sends them here; this service extracts the fields, embeds
-    # them and answers "which playbook covers this alert". The index is one
-    # file on a volume, so a restart does not mean embedding everything again.
-    PLAYBOOK_INDEX_PATH: str = "/data/playbook-index.npz"
+    # them and answers "which playbook covers this alert". The playbooks are one
+    # JSON file on a volume; their vectors are in Qdrant (below), so a restart
+    # does not mean embedding everything again.
+    PLAYBOOK_INDEX_PATH: str = "/data/playbook-index.json"
     # Tier 2: a renamed detection still finds its playbook by spelling.
     PLAYBOOK_FUZZY_CUTOFF: float = 0.85
     # Tier 3: matching by meaning when neither the name nor its spelling does.
@@ -89,6 +90,17 @@ class Settings(BaseSettings):
     # Where the weights are. The image bakes them in here at build time, and
     # runs with HF_HUB_OFFLINE=1 so nothing is fetched from the internet at runtime.
     EMBED_CACHE_DIR: str = "/models"
+
+    # ── Vector database ──────────────────────────────────────────────────────
+    # Qdrant holds one point per playbook description, criterion and runbook
+    # step. QDRANT_URL names a server (docker-compose runs one as soc-qdrant);
+    # unset, Qdrant runs embedded in this process with its files at
+    # QDRANT_PATH. Unreachable, matching by meaning goes quiet and says why —
+    # matching by use case id and name never depends on it.
+    QDRANT_URL: str = ""
+    QDRANT_API_KEY: str = ""
+    QDRANT_PATH: str = "/data/qdrant"
+    QDRANT_TIMEOUT_S: int = 10
 
     model_config = {"env_file": ".env", "case_sensitive": True, "extra": "ignore"}
 
