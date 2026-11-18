@@ -66,6 +66,27 @@ def test_close_to_two_playbooks_at_once_is_not_a_match(client):
     assert "too close together" in result["note"]
 
 
+def test_below_the_match_score_there_is_no_guess(indexed, store):
+    # The threshold is not loosened to find something: an unlinked alert is a miss.
+    store.min_score = 0.99
+    assert match(indexed, "many failed login attempts against user accounts")["how"] == "miss"
+
+
+GENERIC = page("199", [("Alert Name", "Generic Alert Triage"), ("Use Case ID", "UC-GEN-001"),
+                       ("True Condition", "<p>The activity is confirmed malicious</p>")])
+
+
+def test_nothing_near_falls_back_to_the_generic_playbook(client):
+    client.put("/playbooks/index", json={"pages": [*CORPUS, GENERIC]}, headers=AUTH)
+    result = match(client, "Printer out of toner")
+    assert (result["matched"], result["how"], result["playbook"]["page_id"]) == (True, "default", "199")
+    assert "generic triage playbook" in result["note"]
+
+
+def test_with_no_generic_playbook_a_miss_stays_a_miss(indexed):
+    assert match(indexed, "Printer out of toner")["how"] == "miss"
+
+
 def test_the_answer_says_which_corpus_it_came_from(indexed):
     corpus = match(indexed, "Excessive Failed Logins")["corpus"]
     assert corpus["playbooks"] == 3

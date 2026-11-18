@@ -68,8 +68,13 @@ nothing.
 | `exact` | The name or an alias. | — |
 | `fuzzy` | A renamed detection, by spelling. | `PLAYBOOK_FUZZY_CUTOFF` |
 | `semantic` | Different words for the same detection, by embedding. | `PLAYBOOK_SEMANTIC_MIN_SCORE`, `PLAYBOOK_SEMANTIC_MIN_MARGIN` |
+| `default` | No match: the generic triage playbook, the page whose Use Case ID is `PLAYBOOK_DEFAULT_USE_CASE` (`UC-GEN-001`). | `PLAYBOOK_DEFAULT_USE_CASE` (blank: a miss stays a miss) |
 
 `PLAYBOOK_SEMANTIC=false` turns the third tier off and loads no model.
+`default` comes back `matched: true` with a `note` saying it is a reference only;
+the backend tells the model the same. An alert that lands on `default` is not
+linked yet: have the SOAR send its `use_case_id`, or list its name under the
+playbook's Aliases — one playbook covers every alert of its use case.
 
 ## Connecting to Agent-Server
 

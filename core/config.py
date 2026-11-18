@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # Six playbooks is not your wiki: recalibrate on the real pages.
     PLAYBOOK_SEMANTIC_MIN_SCORE: float = 0.75
     PLAYBOOK_SEMANTIC_MIN_MARGIN: float = 0.05
+    # When nothing matches, the playbook whose Use Case ID is this one is the
+    # reference (how=default): a generic triage page, labelled as such. Link an
+    # alert to its own use case by use_case_id or Aliases. Blank: a miss stays a miss.
+    PLAYBOOK_DEFAULT_USE_CASE: str = "UC-GEN-001"
     # More than this in one index request is refused rather than half-read.
     PLAYBOOK_MAX_PAGES: int = 5000
 

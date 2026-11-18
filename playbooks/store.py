@@ -153,13 +153,15 @@ class PlaybookStore:
     def __init__(self, path: str | Path, embedder: Embedder | None,
                  vectordb: VectorDB | None = None, *,
                  fuzzy_cutoff: float = 0.85, semantic: bool = True,
-                 min_score: float = 0.75, min_margin: float = 0.05) -> None:
+                 min_score: float = 0.75, min_margin: float = 0.05,
+                 default_use_case: str = "UC-GEN-001") -> None:
         self.path = Path(path)
         self.embedder = embedder if semantic else None
         self.vectordb = (vectordb or VectorDB()) if self.embedder else None
         self.fuzzy_cutoff = fuzzy_cutoff
         self.min_score = min_score
         self.min_margin = min_margin
+        self.default_use_case = default_use_case
         self._index: Index | None = None
         self._lock = asyncio.Lock()
         self._query_cache: OrderedDict[tuple[str, str], np.ndarray] = OrderedDict()
@@ -387,8 +389,32 @@ class PlaybookStore:
                 result = semantic
             elif semantic.get("note"):
                 result["note"] = f"{result['note']} {semantic['note']}"
+        if not result["matched"]:
+            result = self._fallback(index, result)
         result["corpus"] = self._corpus(index)
         return result
+
+    def _fallback(self, index: Index, missed: dict) -> dict:
+        """
+        No playbook matched: the generic triage playbook (Use Case ID
+        PLAYBOOK_DEFAULT_USE_CASE) is the reference, labelled as such. The fix
+        for an alert that lands here is to link it — the SOAR sends its
+        use_case_id, or the playbook lists its name under Aliases — not a
+        looser match. No generic playbook indexed: the miss stands.
+        """
+        why = missed.get("note", "")
+        page = index.router.by_id.get(self.default_use_case.strip().upper())
+        if page:
+            playbook = index.router.by_page[page]
+            return {
+                "matched": True, "how": "default",
+                "matched_name": playbook.alert_name, "playbook": playbook.as_dict(),
+                "note": (
+                    f"No playbook covers this alert, so the generic triage playbook "
+                    f"{playbook.alert_name!r} is the reference. {why}"
+                ).strip(),
+            }
+        return missed
 
     async def _query_vector(self, text: str) -> np.ndarray:
         key = (self.embedder.name, normalise(text))
@@ -566,6 +592,7 @@ def get_store() -> PlaybookStore:
             semantic=settings.PLAYBOOK_SEMANTIC,
             min_score=settings.PLAYBOOK_SEMANTIC_MIN_SCORE,
             min_margin=settings.PLAYBOOK_SEMANTIC_MIN_MARGIN,
+            default_use_case=settings.PLAYBOOK_DEFAULT_USE_CASE,
         )
     return _store
 
